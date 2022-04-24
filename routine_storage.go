@@ -1,6 +1,7 @@
 package routine
 
 import (
+	"github.com/go-eden/routine/cmap"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -8,14 +9,15 @@ import (
 )
 
 var (
-	storages          atomic.Value       // The global storage map (map[int64]*store)
+	storages cmap.ConcurrentMap // The global storage map (map[int64]*store)
+	//storages          atomic.Value       // The global storage map (map[int64]*store)
 	storageLock       sync.Mutex         // The Lock to control accessing of storages
 	storageGCTimer    *time.Timer        // The timer of storage's garbage collector
 	storageGCInterval = time.Second * 30 // The pre-defined gc interval
 )
 
 func init() {
-	storages.Store(map[int64]*store{})
+	storages = cmap.New()
 }
 
 func gcRunning() bool {
@@ -75,25 +77,19 @@ func (t *storage) Clear() {
 // loadCurrentStore load the store of current goroutine.
 func loadCurrentStore() (s *store) {
 	gid := Goid()
-	storeMap := storages.Load().(map[int64]*store)
-	if s = storeMap[gid]; s == nil {
-		storageLock.Lock()
-		oldStoreMap := storages.Load().(map[int64]*store)
-		if s = oldStoreMap[gid]; s == nil {
-			s = &store{
-				gid:    gid,
-				values: map[uintptr]interface{}{},
-			}
-			newStoreMap := make(map[int64]*store, len(oldStoreMap)+1)
-			for k, v := range oldStoreMap {
-				newStoreMap[k] = v
-			}
-			newStoreMap[gid] = s
-			storages.Store(newStoreMap)
-		}
-		storageLock.Unlock()
+	//storeMap := storages.Load().(map[int64]*store)
+	if ss, ok := storages.Get(gid); ok {
+		return ss.(*store)
 	}
-	return
+	s = &store{
+		gid:    gid,
+		values: map[uintptr]interface{}{},
+	}
+	if ok := storages.SetIfAbsent(gid, s); ok {
+		return s
+	}
+	ss, _ := storages.Get(gid)
+	return ss.(*store)
 }
 
 // clearDeadStore clear all data of dead goroutine.
@@ -109,30 +105,20 @@ func clearDeadStore() {
 	}
 
 	// scan global storeMap check the dead and live store count.
-	var storeMap = storages.Load().(map[int64]*store)
-	var deadCnt, liveCnt int
-	for id, s := range storeMap {
+	var deadGids []int64
+	var liveCnt int
+	storages.IterCb(func(id int64, v interface{}) {
 		if _, ok := gidMap[id]; ok {
-			if atomic.LoadUint32(&s.count) > 0 {
-				liveCnt++
-			}
 			liveCnt++
 		} else {
-			deadCnt++
+			deadGids = append(deadGids, id)
+		}
+	})
+	if len(deadGids) > 0 {
+		for _, gid := range deadGids {
+			storages.Remove(gid)
 		}
 	}
-
-	// clean dead store of dead goroutine if need.
-	if deadCnt > 0 {
-		newStoreMap := make(map[int64]*store, len(storeMap)-deadCnt)
-		for id, s := range storeMap {
-			if _, ok := gidMap[id]; ok {
-				newStoreMap[id] = s
-			}
-		}
-		storages.Store(newStoreMap)
-	}
-
 	// setup next round timer if need. TODO it's ok?
 	if liveCnt > 0 {
 		storageGCTimer.Reset(storageGCInterval)

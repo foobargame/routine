@@ -13,7 +13,6 @@ const (
 	gDead = 6
 )
 
-//go:linkname runtimeG runtime.g
 type runtimeG struct {
 }
 

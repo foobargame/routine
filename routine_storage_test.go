@@ -78,8 +78,7 @@ func TestStorageGC(t *testing.T) {
 		// wait for a while
 		time.Sleep(storageGCInterval + time.Second)
 		assert.True(t, !gcRunning(), "#%v, timer not stoped?", i)
-		storeMap := storages.Load().(map[int64]*store)
-		assert.True(t, len(storeMap) == 0, "#%v, storeMap not empty - %d", i, len(storeMap))
+		assert.True(t, len(storages) == 0, "#%v, storeMap not empty - %d", i, len(storages))
 	}
 
 	//time.Sleep(time.Minute)
